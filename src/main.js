@@ -110,14 +110,21 @@ async function transcribe(file){
     const decoded=await decode(file);
     duration=decoded.duration;audioBuffer=decoded.audioBuffer;
     status('Sending audio to Transkun V2 piano model…');
+    status('Uploading audio to Transkun V2…');
     const response=await fetch('/api/transcribe',{
       method:'POST',
       headers:{'Content-Type':'application/octet-stream','X-File-Name':'transkun-input.wav'},
-      body:encodeWav(decoded.samples,22050)
+      body:encodeWav(decoded.samples,22050),
+      signal:AbortSignal.timeout(600000)
     });
-    if(!response.ok){let message='Transcription service failed ('+response.status+').';try{const data=await response.json();message=data.error||data.detail||message}catch{}throw Error(message)}
-    const result=await response.json();
-    notes=(result.notes||[]).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
+    status('Transkun responded ('+response.status+') — reading transcription…');
+    const responseText=await response.text();
+    let result;
+    try{result=JSON.parse(responseText)}catch{throw Error('Transkun returned an unreadable response: '+responseText.slice(0,180))}
+    if(!response.ok)throw Error(result.error||result.detail||('Transcription service failed ('+response.status+').'));
+    if(!Array.isArray(result.notes))throw Error('Transkun response did not contain a notes array.');
+    status('Transkun returned '+result.notes.length+' raw notes — building piano roll…');
+    notes=result.notes.filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
       .sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);
     if(!notes.length)throw Error('Transkun could not detect clear piano notes. Try a cleaner recording.');
     duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
