@@ -9,7 +9,7 @@ const $ = id => document.getElementById(id);
 const canvas = $('pianoRoll'), ctx = canvas.getContext('2d');
 const MODEL_URL = '/model/model.json';
 const NAMES = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
-let notes=[], duration=0, playing=false, started=0, offset=0, raf=0, audio=null, audioBuffer=null, audioSource=null, ffmpeg=null, ffmpegPromise=null;
+let notes=[], duration=0, playing=false, started=0, offset=0, raf=0, audio=null, audioBuffer=null, audioSource=null, ffmpeg=null, ffmpegPromise=null, currentFile=null;
 
 const fmt=s=>Math.floor(Math.max(0,s)/60)+':'+String(Math.floor(Math.max(0,s)%60)).padStart(2,'0');
 function status(s){$('status').textContent=s}
@@ -131,7 +131,56 @@ function estimateSustainedLengths(list,frameActivations,audioDuration){
   });
 }
 
-async function transcribe(file){$('audioFile').disabled=true;$('linkBtn').disabled=true;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);progress(0);try{if(isVideoFile(file))file=await extractAudio(file);status('Decoding audio…');const decoded=await decode(file);duration=decoded.duration;audioBuffer=decoded.audioBuffer;status('Loading Spotify Basic Pitch…');await tf.setBackend('webgl');await tf.ready();const model=new BasicPitch(MODEL_URL),frames=[],onsets=[],contours=[];status('AI is detecting piano notes…');await model.evaluateModel(decoded.samples,(f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c)},progress);status('Converting detections into notes…');const raw=outputToNotesPoly(frames,onsets,.45,.20,5,true,null,27.5,false,18);const detected=noteFramesToTime(addPitchBendsToNoteEvents(contours,raw)).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>.025).sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);notes=estimateSustainedLengths(detected,frames,decoded.duration);if(!notes.length)throw Error('No clear notes detected. Try a cleaner piano recording.');duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));$('trackName').textContent=file.name;$('trackMeta').textContent='Piano transcription · '+fmt(duration);$('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);$('empty').hidden=true;offset=0;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);$('seek').disabled=false;progress(1);status('Done — '+notes.length+' notes detected.');draw()}catch(e){console.error(e);status('Could not transcribe: '+(e.message||'unknown error'))}finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}}
+async function transcribe(file){$('audioFile').disabled=true;$('linkBtn').disabled=true;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);progress(0);try{if(isVideoFile(file))file=await extractAudio(file);currentFile=file;status('Decoding audio…');const decoded=await decode(file);duration=decoded.duration;audioBuffer=decoded.audioBuffer;status('Loading Spotify Basic Pitch…');await tf.setBackend('webgl');await tf.ready();const model=new BasicPitch(MODEL_URL),frames=[],onsets=[],contours=[];status('AI is detecting piano notes…');await model.evaluateModel(decoded.samples,(f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c)},progress);status('Converting detections into notes…');const raw=outputToNotesPoly(frames,onsets,.45,.20,5,true,null,27.5,false,18);const detected=noteFramesToTime(addPitchBendsToNoteEvents(contours,raw)).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>.025).sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);notes=estimateSustainedLengths(detected,frames,decoded.duration);if(!notes.length)throw Error('No clear notes detected. Try a cleaner piano recording.');duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));$('trackName').textContent=file.name;$('trackMeta').textContent='Piano transcription · '+fmt(duration);$('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);$('empty').hidden=true;offset=0;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);$('saveCloudBtn').disabled=false;$('seek').disabled=false;progress(1);status('Done — '+notes.length+' notes detected.');draw()}catch(e){console.error(e);status('Could not transcribe: '+(e.message||'unknown error'))}finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}}
+
+const PROJECTS_KEY='flowingNotesCloudProjects';
+function getCloudProjects(){try{return JSON.parse(localStorage.getItem(PROJECTS_KEY)||'[]')}catch{return []}}
+function refreshCloudProjects(){
+  const select=$('savedProjects');select.innerHTML='<option value="">Saved cloud projects…</option>';
+  for(const p of getCloudProjects()){const option=document.createElement('option');option.value=p.id;option.textContent=p.name||'Piano recording';select.append(option)}
+  $('openCloudBtn').disabled=select.options.length<=1;
+}
+async function cloudRequest(url,project,options={}){
+  const headers=new Headers(options.headers||{});if(project?.token)headers.set('Authorization','Bearer '+project.token);
+  const response=await fetch(url,{...options,headers});
+  if(!response.ok){let message='Cloud storage request failed ('+response.status+').';try{message=(await response.json()).error||message}catch{}throw Error(message)}
+  return response;
+}
+async function saveCloudProject(){
+  if(!currentFile||!notes.length){status('Transcribe a recording before saving it to the cloud.');return}
+  $('saveCloudBtn').disabled=true;
+  try{
+    status('Creating private cloud project…');
+    const created=await cloudRequest('/api/projects',null,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const project=await created.json();
+    status('Uploading your recording to Singapore storage…');
+    await cloudRequest('/api/projects/'+project.id+'/recording',{...project,token:project.token},{method:'PUT',headers:{'Content-Type':'application/octet-stream','X-File-Type':currentFile.type||'audio/wav','X-File-Name':encodeURIComponent(currentFile.name||'recording.wav')},body:currentFile});
+    status('Saving detected notes…');
+    await cloudRequest('/api/projects/'+project.id+'/transcription',project,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:notes.map(n=>({pitchMidi:n.pitchMidi,startTimeSeconds:n.startTimeSeconds,durationSeconds:n.durationSeconds,amplitude:n.amplitude})),duration,trackName:currentFile.name||'Piano recording'})});
+    const saved=getCloudProjects();saved.unshift({id:project.id,token:project.token,name:currentFile.name||'Piano recording',updatedAt:new Date().toISOString()});
+    localStorage.setItem(PROJECTS_KEY,JSON.stringify(saved.slice(0,30)));refreshCloudProjects();
+    $('savedProjects').value=project.id;status('Saved privately to your Flowing Notes cloud storage.');
+  }catch(e){console.error(e);status('Cloud save failed: '+e.message)}
+  finally{$('saveCloudBtn').disabled=false}
+}
+async function openCloudProject(){
+  const project=getCloudProjects().find(p=>p.id===$('savedProjects').value);if(!project)return;
+  $('openCloudBtn').disabled=true;
+  try{
+    status('Loading saved transcription…');
+    const transcription=await (await cloudRequest('/api/projects/'+project.id+'/transcription',project)).json();
+    status('Loading original recording…');
+    const response=await cloudRequest('/api/projects/'+project.id+'/recording',project);
+    const blob=await response.blob();currentFile=new File([blob],project.name||'recording.wav',{type:blob.type||'audio/wav'});
+    const decoded=await decode(currentFile);audioBuffer=decoded.audioBuffer;
+    notes=transcription.notes||[];duration=transcription.duration||decoded.duration;duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
+    $('trackName').textContent=transcription.trackName||project.name||'Saved piano roll';$('trackMeta').textContent='Cloud project · '+fmt(duration);
+    $('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);
+    $('empty').hidden=true;offset=0;playing=false;['playBtn','stopBtn','exportBtn','saveCloudBtn'].forEach(id=>$(id).disabled=false);$('seek').disabled=false;$('clock').textContent='0:00 / '+fmt(duration);draw();status('Cloud project loaded — no re-upload or re-transcription needed.');
+  }catch(e){console.error(e);status('Could not open cloud project: '+e.message)}
+  finally{$('openCloudBtn').disabled=false}
+}
+
 function stopAudio(){if(audioSource){try{audioSource.stop()}catch{}audioSource.disconnect();audioSource=null}if(audio){audio.close();audio=null}}
 function play(){if(!audioBuffer){status('Original audio is unavailable. Please upload the recording again.');return}if(offset>=duration)offset=0;playing=true;started=performance.now();audio=new AudioContext();audioSource=audio.createBufferSource();audioSource.buffer=audioBuffer;audioSource.connect(audio.destination);audioSource.start(0,Math.min(offset,audioBuffer.duration));$('playBtn').textContent='Ⅱ Pause';draw()}
 function pause(){if(!playing)return;offset=Math.min(duration,offset+(performance.now()-started)/1000);playing=false;cancelAnimationFrame(raf);stopAudio();$('playBtn').textContent='▶ Play';draw();$('clock').textContent=fmt(offset)+' / '+fmt(duration)}
@@ -141,5 +190,5 @@ function buildKeyboard(){const k=$('keyboard');for(let p=21;p<=108;p++){const el
 $('audioFile').addEventListener('change',e=>{if(e.target.files?.[0])transcribe(e.target.files[0])});
 $('linkBtn').onclick=async()=>{const value=$('videoUrl').value.trim();if(!value){status('Paste a direct audio or video file URL first.');return}try{const file=await fetchMediaUrl(value);await transcribe(file)}catch(e){console.error(e);status('Could not load link: '+(e.message||'unknown error'))}};
 $('videoUrl').addEventListener('keydown',e=>{if(e.key==='Enter')$('linkBtn').click()});
-$('playBtn').onclick=()=>playing?pause():play();$('stopBtn').onclick=()=>{pause();offset=0;draw();$('seek').value=0;$('clock').textContent='0:00 / '+fmt(duration)};$('seek').oninput=e=>{pause();offset=duration*Number(e.target.value)/1000;draw();$('clock').textContent=fmt(offset)+' / '+fmt(duration)};$('exportBtn').onclick=exportMidi;
+$('playBtn').onclick=()=>playing?pause():play();$('stopBtn').onclick=()=>{pause();offset=0;draw();$('seek').value=0;$('clock').textContent='0:00 / '+fmt(duration)};$('seek').oninput=e=>{pause();offset=duration*Number(e.target.value)/1000;draw();$('clock').textContent=fmt(offset)+' / '+fmt(duration)};$('exportBtn').onclick=exportMidi;$('saveCloudBtn').onclick=saveCloudProject;$('openCloudBtn').onclick=openCloudProject;refreshCloudProjects();
 buildKeyboard();new ResizeObserver(resize).observe(canvas);resize();
