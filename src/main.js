@@ -93,7 +93,45 @@ async function fetchMediaUrl(value){
 }
 
 async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
-async function transcribe(file){$('audioFile').disabled=true;$('linkBtn').disabled=true;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);progress(0);try{if(isVideoFile(file))file=await extractAudio(file);status('Decoding audio…');const decoded=await decode(file);duration=decoded.duration;audioBuffer=decoded.audioBuffer;status('Loading Spotify Basic Pitch…');await tf.setBackend('webgl');await tf.ready();const model=new BasicPitch(MODEL_URL),frames=[],onsets=[],contours=[];status('AI is detecting piano notes…');await model.evaluateModel(decoded.samples,(f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c)},progress);status('Converting detections into notes…');const raw=outputToNotesPoly(frames,onsets,.45,.20,5,true,null,27.5,false,18);notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,raw)).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>.025).sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);if(!notes.length)throw Error('No clear notes detected. Try a cleaner piano recording.');duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));$('trackName').textContent=file.name;$('trackMeta').textContent='Piano transcription · '+fmt(duration);$('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);$('empty').hidden=true;offset=0;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);$('seek').disabled=false;progress(1);status('Done — '+notes.length+' notes detected.');draw()}catch(e){console.error(e);status('Could not transcribe: '+(e.message||'unknown error'))}finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}}
+function estimateSustainedLengths(list,frameActivations,audioDuration){
+  const frameCount=frameActivations.length;
+  if(!frameCount||!frameActivations[0]?.length)return list;
+  const secondsPerFrame=audioDuration/frameCount;
+  const maxTailSeconds=.85,quietFrames=9;
+  const nextSamePitch=new Map();
+  for(const n of list){
+    const starts=nextSamePitch.get(n.pitchMidi)||[];
+    starts.push(n.startTimeSeconds);
+    nextSamePitch.set(n.pitchMidi,starts);
+  }
+  for(const starts of nextSamePitch.values())starts.sort((a,b)=>a-b);
+  return list.map(n=>{
+    const pitchIndex=n.pitchMidi-21;
+    if(pitchIndex<0||pitchIndex>=frameActivations[0].length)return n;
+    const startFrame=Math.max(0,Math.min(frameCount-1,Math.floor(n.startTimeSeconds/secondsPerFrame)));
+    const detectedEnd=n.startTimeSeconds+n.durationSeconds;
+    const endFrame=Math.max(startFrame+1,Math.min(frameCount-1,Math.ceil(detectedEnd/secondsPerFrame)));
+    let peak=0;
+    for(let i=startFrame;i<endFrame;i++)peak=Math.max(peak,frameActivations[i]?.[pitchIndex]||0);
+    if(peak<.12)return n;
+    const threshold=Math.max(.055,peak*.16);
+    const laterStarts=nextSamePitch.get(n.pitchMidi)||[];
+    const nextStart=laterStarts.find(t=>t>n.startTimeSeconds+.01);
+    const scanLimit=Math.min(audioDuration,detectedEnd+maxTailSeconds,nextStart==null?audioDuration:nextStart-.025);
+    const limitFrame=Math.min(frameCount-1,Math.ceil(scanLimit/secondsPerFrame));
+    let lastActive=endFrame-1,quiet=0;
+    for(let i=endFrame;i<=limitFrame;i++){
+      const value=frameActivations[i]?.[pitchIndex]||0;
+      if(value>=threshold){lastActive=i;quiet=0}
+      else if(++quiet>=quietFrames)break;
+    }
+    const estimatedEnd=Math.min(scanLimit,Math.max(detectedEnd,(lastActive+1)*secondsPerFrame));
+    if(estimatedEnd-detectedEnd<.045)return n;
+    return {...n,durationSeconds:estimatedEnd-n.startTimeSeconds};
+  });
+}
+
+async function transcribe(file){$('audioFile').disabled=true;$('linkBtn').disabled=true;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);progress(0);try{if(isVideoFile(file))file=await extractAudio(file);status('Decoding audio…');const decoded=await decode(file);duration=decoded.duration;audioBuffer=decoded.audioBuffer;status('Loading Spotify Basic Pitch…');await tf.setBackend('webgl');await tf.ready();const model=new BasicPitch(MODEL_URL),frames=[],onsets=[],contours=[];status('AI is detecting piano notes…');await model.evaluateModel(decoded.samples,(f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c)},progress);status('Converting detections into notes…');const raw=outputToNotesPoly(frames,onsets,.45,.20,5,true,null,27.5,false,18);const detected=noteFramesToTime(addPitchBendsToNoteEvents(contours,raw)).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>.025).sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);notes=estimateSustainedLengths(detected,frames,decoded.duration);if(!notes.length)throw Error('No clear notes detected. Try a cleaner piano recording.');duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));$('trackName').textContent=file.name;$('trackMeta').textContent='Piano transcription · '+fmt(duration);$('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);$('empty').hidden=true;offset=0;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);$('seek').disabled=false;progress(1);status('Done — '+notes.length+' notes detected.');draw()}catch(e){console.error(e);status('Could not transcribe: '+(e.message||'unknown error'))}finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}}
 function stopAudio(){if(audioSource){try{audioSource.stop()}catch{}audioSource.disconnect();audioSource=null}if(audio){audio.close();audio=null}}
 function play(){if(!audioBuffer){status('Original audio is unavailable. Please upload the recording again.');return}if(offset>=duration)offset=0;playing=true;started=performance.now();audio=new AudioContext();audioSource=audio.createBufferSource();audioSource.buffer=audioBuffer;audioSource.connect(audio.destination);audioSource.start(0,Math.min(offset,audioBuffer.duration));$('playBtn').textContent='Ⅱ Pause';draw()}
 function pause(){if(!playing)return;offset=Math.min(duration,offset+(performance.now()-started)/1000);playing=false;cancelAnimationFrame(raf);stopAudio();$('playBtn').textContent='▶ Play';draw();$('clock').textContent=fmt(offset)+' / '+fmt(duration)}
