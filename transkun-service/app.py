@@ -70,7 +70,7 @@ def run_transcription(payload: bytes, filename: str):
 
     try:
         with inference_lock, torch.inference_mode():
-            estimated = model.transcribe(audio, discardSecondHalf=False)
+            estimated = model.transcribe(audio, stepInSecond=4, segmentSizeInSecond=8, discardSecondHalf=False)
         output = []
         for note in estimated:
             pitch = int(note.pitch)
