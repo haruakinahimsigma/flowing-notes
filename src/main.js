@@ -51,7 +51,7 @@ async function extractAudio(file){
   return new File([data],file.name.replace(/[.][^.]+$/,'')+'.wav',{type:'audio/wav'});
 }
 function platformPage(url){
-  const host=url.hostname.toLowerCase().replace(/^www\\./,'');
+  const host=url.hostname.toLowerCase().startsWith('www.')?url.hostname.toLowerCase().slice(4):url.hostname.toLowerCase();
   const matches=(domain)=>host===domain||host.endsWith('.'+domain);
   if(matches('youtube.com')||host==='youtu.be'||matches('youtube-nocookie.com'))return 'YouTube';
   if(matches('instagram.com')||host==='instagr.am')return 'Instagram';
@@ -78,11 +78,18 @@ async function fetchMediaUrl(value){
   const blob=await response.blob();
   if(blob.size>maxBytes)throw Error('This file is larger than the 200 MB browser-processing limit.');
   const type=(blob.type||'').split(';')[0].trim().toLowerCase();
-  const name=decodeURIComponent(url.pathname.split('/').pop()||'linked-media').replace(/[\\\\/\\0-\\x1f]/g,'_');
+  const rawName=url.pathname.split('/').pop()||'linked-media';
+  let name;
+  try{name=decodeURIComponent(rawName)}catch{name=rawName}
+  name=name.replaceAll('/','_').replaceAll('\\','_');
+  const extension=(name.toLowerCase().split('.').pop()||'');
+  const audioExtensions=new Set(['mp3','wav','m4a','ogg','flac','aac']);
+  const videoExtensions=new Set(['mp4','mov','m4v','webm','mkv','avi']);
   const recognizedType=type.startsWith('audio/')||type.startsWith('video/');
-  const recognizedExtension=/\\.(mp3|wav|m4a|ogg|flac|aac|mp4|mov|m4v|webm|mkv|avi)$/i.test(name);
+  const recognizedExtension=audioExtensions.has(extension)||videoExtensions.has(extension);
   if(!recognizedType&&!recognizedExtension)throw Error('The URL did not return a recognized audio or video file. Paste a direct MP3, WAV, MP4, MOV or WEBM link.');
-  return new File([blob],name,{type:type||(recognizedExtension&&/\\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name)?'video/mp4':'audio/mpeg')});
+  const fallbackType=videoExtensions.has(extension)?'video/mp4':'audio/mpeg';
+  return new File([blob],name,{type:type||fallbackType});
 }
 
 async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration}}finally{await decoder.close()}}
