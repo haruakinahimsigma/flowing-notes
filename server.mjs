@@ -39,6 +39,23 @@ async function authorize(req,res,next){
 app.disable('x-powered-by');
 app.use(express.json({limit:'8mb'}));
 app.get('/api/health',(req,res)=>res.json({ok:missing.length===0,storage:missing.length===0?'connected':'not-configured'}));
+app.post('/api/transcribe',express.raw({type:'application/octet-stream',limit:'100mb'}),async(req,res)=>{
+  try{
+    if(!Buffer.isBuffer(req.body)||!req.body.length)return res.status(400).json({error:'Audio file is empty.'});
+    const upstreamUrl=process.env.TRANSKUN_URL||'http://transkun.railway.internal:8000';
+    const upstream=await fetch(upstreamUrl+'/transcribe',{
+      method:'POST',
+      headers:{'Content-Type':'application/octet-stream','X-File-Name':req.get('x-file-name')||'recording.wav'},
+      body:req.body,
+      signal:AbortSignal.timeout(900000)
+    });
+    const body=await upstream.text();
+    res.status(upstream.status).type('application/json').send(body);
+  }catch(e){
+    console.error('Transkun request failed:',e);
+    res.status(502).json({error:'The Transkun V2 service is unavailable or timed out. Please try again.'});
+  }
+});
 app.post('/api/projects',async(req,res)=>{
   try{
     if(missing.length)return res.status(503).json({error:'Cloud storage is not configured yet.'});
