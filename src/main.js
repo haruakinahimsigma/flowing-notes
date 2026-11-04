@@ -88,7 +88,17 @@ async function fetchMediaUrl(value){
   return new File([blob],name,{type:type||fallbackType});
 }
 
-async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
+async function encodeWav(samples,sampleRate=22050){
+  const bytes=samples.length*2,buffer=new ArrayBuffer(44+bytes),view=new DataView(buffer);
+  const write=(offset,value)=>{for(let i=0;i<value.length;i++)view.setUint8(offset+i,value.charCodeAt(i))};
+  write(0,'RIFF');view.setUint32(4,36+bytes,true);write(8,'WAVE');write(12,'fmt ');
+  view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);
+  view.setUint32(24,sampleRate,true);view.setUint32(28,sampleRate*2,true);
+  view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,bytes,true);
+  for(let i=0;i<samples.length;i++){const value=Math.max(-1,Math.min(1,samples[i]));view.setInt16(44+i*2,value<0?value*32768:value*32767,true)}
+  return new Blob([buffer],{type:'audio/wav'});
+}
+function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
 async function transcribe(file){
   $('audioFile').disabled=true;$('linkBtn').disabled=true;
   ['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);
@@ -102,10 +112,10 @@ async function transcribe(file){
     status('Sending audio to Transkun V2 piano model…');
     const response=await fetch('/api/transcribe',{
       method:'POST',
-      headers:{'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(file.name||'recording.wav')},
-      body:file
+      headers:{'Content-Type':'application/octet-stream','X-File-Name':'transkun-input.wav'},
+      body:encodeWav(decoded.samples,22050)
     });
-    if(!response.ok){let message='Transcription service failed ('+response.status+').';try{message=(await response.json()).error||message}catch{}throw Error(message)}
+    if(!response.ok){let message='Transcription service failed ('+response.status+').';try{const data=await response.json();message=data.error||data.detail||message}catch{}throw Error(message)}
     const result=await response.json();
     notes=(result.notes||[]).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
       .sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);
