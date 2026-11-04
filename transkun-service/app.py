@@ -10,7 +10,7 @@ import moduleconf
 import pkg_resources
 from fastapi import FastAPI, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
-from pydub import AudioSegment
+from scipy.io import wavfile
 
 app = FastAPI(title="Flowing Notes Transkun V2")
 model = None
@@ -49,10 +49,16 @@ def run_transcription(payload: bytes, filename: str):
     allowed = {"wav", "mp3", "m4a", "aac", "ogg", "flac", "aiff", "aif"}
     fmt = suffix if suffix in allowed else None
     try:
-        segment = AudioSegment.from_file(io.BytesIO(payload), format=fmt)
-        segment = segment.set_sample_width(2).set_channels(1)
-        sample_rate = segment.frame_rate
-        samples = np.asarray(segment.get_array_of_samples(), dtype=np.float32).reshape(-1, 1) / 32768.0
+        sample_rate, samples = wavfile.read(io.BytesIO(payload))
+        if samples.ndim > 1:
+            samples = samples.astype(np.float32).mean(axis=1)
+        if np.issubdtype(samples.dtype, np.integer):
+            info = np.iinfo(samples.dtype)
+            scale = float(max(abs(info.min), info.max))
+            samples = samples.astype(np.float32) / scale
+        else:
+            samples = samples.astype(np.float32)
+        samples = samples.reshape(-1, 1)
         if sample_rate != model.fs:
             samples = soxr.resample(samples, sample_rate, model.fs)
         audio = torch.from_numpy(np.asarray(samples, dtype=np.float32))
