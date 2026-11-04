@@ -1,14 +1,9 @@
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
-ncls
-pretty_midi
+numpy
 scipy
 mir_eval
+pretty_midi
+ncls
 soxr
 moduleconf
-torch_optimizer
-tqdm
-tensorboard
-matplotlib
-seaborn
-sox
