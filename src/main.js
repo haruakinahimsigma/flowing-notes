@@ -1,13 +1,9 @@
-import * as tf from '@tensorflow/tfjs';
-import '@tensorflow/tfjs-backend-webgl';
-import { BasicPitch, outputToNotesPoly, noteFramesToTime, addPitchBendsToNoteEvents } from '@spotify/basic-pitch';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL, fetchFile } from '@ffmpeg/util';
 import './style.css';
 
 const $ = id => document.getElementById(id);
 const canvas = $('pianoRoll'), ctx = canvas.getContext('2d');
-const MODEL_URL = '/model/model.json';
 const NAMES = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
 let notes=[], duration=0, playing=false, started=0, offset=0, raf=0, audio=null, audioBuffer=null, audioSource=null, ffmpeg=null, ffmpegPromise=null, currentFile=null;
 
@@ -93,48 +89,40 @@ async function fetchMediaUrl(value){
 }
 
 async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
-function estimateSustainedLengths(list,frameActivations,audioDuration){
-  const frameCount=frameActivations.length;
-  if(!frameCount||!frameActivations[0]?.length)return list;
-  const secondsPerFrame=audioDuration/frameCount;
-  // Piano activations often decay below the old fixed threshold before the
-  // audible note has finished. Use a lower relative threshold and tolerate
-  // short gaps in the activation envelope.
-  const maxTailSeconds=1.25,quietFrames=12;
-  const nextSamePitch=new Map();
-  for(const n of list){
-    const starts=nextSamePitch.get(n.pitchMidi)||[];
-    starts.push(n.startTimeSeconds);
-    nextSamePitch.set(n.pitchMidi,starts);
-  }
-  for(const starts of nextSamePitch.values())starts.sort((a,b)=>a-b);
-  return list.map(n=>{
-    const pitchIndex=n.pitchMidi-21;
-    if(pitchIndex<0||pitchIndex>=frameActivations[0].length)return n;
-    const startFrame=Math.max(0,Math.min(frameCount-1,Math.floor(n.startTimeSeconds/secondsPerFrame)));
-    const detectedEnd=n.startTimeSeconds+n.durationSeconds;
-    const endFrame=Math.max(startFrame+1,Math.min(frameCount-1,Math.ceil(detectedEnd/secondsPerFrame)));
-    let peak=0;
-    for(let i=startFrame;i<endFrame;i++)peak=Math.max(peak,frameActivations[i]?.[pitchIndex]||0);
-    if(peak<.035)return n;
-    const threshold=Math.max(.02,peak*.12);
-    const laterStarts=nextSamePitch.get(n.pitchMidi)||[];
-    const nextStart=laterStarts.find(t=>t>n.startTimeSeconds+.01);
-    const scanLimit=Math.min(audioDuration,detectedEnd+maxTailSeconds,nextStart==null?audioDuration:nextStart-.02);
-    const limitFrame=Math.min(frameCount-1,Math.ceil(scanLimit/secondsPerFrame));
-    let lastActive=endFrame-1,quiet=0,tailActiveFrames=0;
-    for(let i=endFrame;i<=limitFrame;i++){
-      const value=frameActivations[i]?.[pitchIndex]||0;
-      if(value>=threshold){lastActive=i;quiet=0;tailActiveFrames++}
-      else if(++quiet>=quietFrames)break;
-    }
-    const estimatedEnd=Math.min(scanLimit,Math.max(detectedEnd,(lastActive+1)*secondsPerFrame));
-    if(tailActiveFrames<2||estimatedEnd-detectedEnd<.05)return n;
-    return {...n,durationSeconds:estimatedEnd-n.startTimeSeconds};
-  });
+async function transcribe(file){
+  $('audioFile').disabled=true;$('linkBtn').disabled=true;
+  ['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);
+  $('saveCloudBtn').disabled=true;progress(0);
+  try{
+    if(isVideoFile(file))file=await extractAudio(file);
+    currentFile=file;
+    status('Preparing audio for Transkun V2…');
+    const decoded=await decode(file);
+    duration=decoded.duration;audioBuffer=decoded.audioBuffer;
+    status('Sending audio to Transkun V2 piano model…');
+    const response=await fetch('/api/transcribe',{
+      method:'POST',
+      headers:{'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(file.name||'recording.wav')},
+      body:file
+    });
+    if(!response.ok){let message='Transcription service failed ('+response.status+').';try{message=(await response.json()).error||message}catch{}throw Error(message)}
+    const result=await response.json();
+    notes=(result.notes||[]).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
+      .sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);
+    if(!notes.length)throw Error('Transkun could not detect clear piano notes. Try a cleaner recording.');
+    duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
+    $('trackName').textContent=file.name;
+    $('trackMeta').textContent='Transkun V2 piano transcription · '+fmt(duration);
+    $('noteCount').textContent=notes.length.toLocaleString();
+    $('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);
+    $('empty').hidden=true;offset=0;
+    ['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);
+    $('saveCloudBtn').disabled=false;$('seek').disabled=false;
+    progress(1);status('Done — '+notes.length+' notes detected by Transkun V2.');draw();
+  }catch(e){
+    console.error(e);status('Could not transcribe: '+(e.message||'unknown error'));
+  }finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}
 }
-
-async function transcribe(file){$('audioFile').disabled=true;$('linkBtn').disabled=true;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);progress(0);try{if(isVideoFile(file))file=await extractAudio(file);currentFile=file;status('Decoding audio…');const decoded=await decode(file);duration=decoded.duration;audioBuffer=decoded.audioBuffer;status('Loading Spotify Basic Pitch…');await tf.setBackend('webgl');await tf.ready();const model=new BasicPitch(MODEL_URL),frames=[],onsets=[],contours=[];status('AI is detecting piano notes…');await model.evaluateModel(decoded.samples,(f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c)},progress);status('Converting detections into notes…');const raw=outputToNotesPoly(frames,onsets,.45,.20,5,true,null,27.5,false,18);const detected=noteFramesToTime(addPitchBendsToNoteEvents(contours,raw)).filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>.025).sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);notes=estimateSustainedLengths(detected,frames,decoded.duration);if(!notes.length)throw Error('No clear notes detected. Try a cleaner piano recording.');duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));$('trackName').textContent=file.name;$('trackMeta').textContent='Piano transcription · '+fmt(duration);$('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);$('empty').hidden=true;offset=0;['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);$('saveCloudBtn').disabled=false;$('seek').disabled=false;progress(1);status('Done — '+notes.length+' notes detected.');draw()}catch(e){console.error(e);status('Could not transcribe: '+(e.message||'unknown error'))}finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}}
 
 const PROJECTS_KEY='flowingNotesCloudProjects';
 function getCloudProjects(){try{return JSON.parse(localStorage.getItem(PROJECTS_KEY)||'[]')}catch{return []}}
