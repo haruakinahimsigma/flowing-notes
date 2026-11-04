@@ -88,7 +88,7 @@ async function fetchMediaUrl(value){
   return new File([blob],name,{type:type||fallbackType});
 }
 
-async function encodeWav(samples,sampleRate=22050){
+function encodeWav(samples,sampleRate=22050){
   const bytes=samples.length*2,buffer=new ArrayBuffer(44+bytes),view=new DataView(buffer);
   const write=(offset,value)=>{for(let i=0;i<value.length;i++)view.setUint8(offset+i,value.charCodeAt(i))};
   write(0,'RIFF');view.setUint32(4,36+bytes,true);write(8,'WAVE');write(12,'fmt ');
@@ -98,7 +98,7 @@ async function encodeWav(samples,sampleRate=22050){
   for(let i=0;i<samples.length;i++){const value=Math.max(-1,Math.min(1,samples[i]));view.setInt16(44+i*2,value<0?value*32768:value*32767,true)}
   return new Blob([buffer],{type:'audio/wav'});
 }
-function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
+async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration,audioBuffer:source}}finally{await decoder.close()}}
 async function transcribe(file){
   $('audioFile').disabled=true;$('linkBtn').disabled=true;
   ['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=true);
