@@ -1,0 +1,15 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+ncls
+pretty_midi
+scipy
+mir_eval
+pydub
+soxr
+moduleconf
+torch_optimizer
+tqdm
+tensorboard
+matplotlib
+seaborn
+sox
