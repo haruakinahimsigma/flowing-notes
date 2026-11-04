@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const app=express();
-const port=Number(process.env.PORT||10000);
+const port=10000;
 const bucket=process.env.S3_BUCKET;
 const required=['S3_ENDPOINT','S3_BUCKET','S3_REGION','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY'];
 const missing=required.filter(k=>!process.env[k]);
