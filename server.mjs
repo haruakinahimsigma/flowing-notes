@@ -13,7 +13,7 @@ if(missing.length) console.error('Missing storage configuration:',missing.join('
 const s3=new S3Client({
   region:process.env.S3_REGION||'auto',
   endpoint:process.env.S3_ENDPOINT,
-  forcePathStyle:true,
+  forcePathStyle:false,
   credentials:{accessKeyId:process.env.S3_ACCESS_KEY_ID||'missing',secretAccessKey:process.env.S3_SECRET_ACCESS_KEY||'missing'}
 });
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -51,7 +51,7 @@ app.put('/api/projects/:id/recording',authorize,express.raw({type:'application/o
   try{
     if(!Buffer.isBuffer(req.body)||!req.body.length)return res.status(400).json({error:'Recording body is empty.'});
     const contentType=String(req.get('x-file-type')||'audio/mpeg').slice(0,120);
-    const fileName=String(req.get('x-file-name')||'recording').slice(0,180);
+    let fileName=String(req.get('x-file-name')||'recording').slice(0,540);try{fileName=decodeURIComponent(fileName)}catch{}fileName=fileName.slice(0,180);
     await s3.send(new PutObjectCommand({Bucket:bucket,Key:keyFor(req.projectId,'recording'),Body:req.body,ContentType:contentType}));
     const meta={...req.project,fileName,contentType,hasRecording:true,updatedAt:new Date().toISOString()};
     await writeJson(keyFor(req.projectId,'project.json'),meta);
