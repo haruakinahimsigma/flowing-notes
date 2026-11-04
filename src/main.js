@@ -97,7 +97,10 @@ function estimateSustainedLengths(list,frameActivations,audioDuration){
   const frameCount=frameActivations.length;
   if(!frameCount||!frameActivations[0]?.length)return list;
   const secondsPerFrame=audioDuration/frameCount;
-  const maxTailSeconds=.85,quietFrames=9;
+  // Piano activations often decay below the old fixed threshold before the
+  // audible note has finished. Use a lower relative threshold and tolerate
+  // short gaps in the activation envelope.
+  const maxTailSeconds=1.25,quietFrames=12;
   const nextSamePitch=new Map();
   for(const n of list){
     const starts=nextSamePitch.get(n.pitchMidi)||[];
@@ -113,20 +116,20 @@ function estimateSustainedLengths(list,frameActivations,audioDuration){
     const endFrame=Math.max(startFrame+1,Math.min(frameCount-1,Math.ceil(detectedEnd/secondsPerFrame)));
     let peak=0;
     for(let i=startFrame;i<endFrame;i++)peak=Math.max(peak,frameActivations[i]?.[pitchIndex]||0);
-    if(peak<.12)return n;
-    const threshold=Math.max(.055,peak*.16);
+    if(peak<.035)return n;
+    const threshold=Math.max(.02,peak*.12);
     const laterStarts=nextSamePitch.get(n.pitchMidi)||[];
     const nextStart=laterStarts.find(t=>t>n.startTimeSeconds+.01);
-    const scanLimit=Math.min(audioDuration,detectedEnd+maxTailSeconds,nextStart==null?audioDuration:nextStart-.025);
+    const scanLimit=Math.min(audioDuration,detectedEnd+maxTailSeconds,nextStart==null?audioDuration:nextStart-.02);
     const limitFrame=Math.min(frameCount-1,Math.ceil(scanLimit/secondsPerFrame));
-    let lastActive=endFrame-1,quiet=0;
+    let lastActive=endFrame-1,quiet=0,tailActiveFrames=0;
     for(let i=endFrame;i<=limitFrame;i++){
       const value=frameActivations[i]?.[pitchIndex]||0;
-      if(value>=threshold){lastActive=i;quiet=0}
+      if(value>=threshold){lastActive=i;quiet=0;tailActiveFrames++}
       else if(++quiet>=quietFrames)break;
     }
     const estimatedEnd=Math.min(scanLimit,Math.max(detectedEnd,(lastActive+1)*secondsPerFrame));
-    if(estimatedEnd-detectedEnd<.045)return n;
+    if(tailActiveFrames<2||estimatedEnd-detectedEnd<.05)return n;
     return {...n,durationSeconds:estimatedEnd-n.startTimeSeconds};
   });
 }
