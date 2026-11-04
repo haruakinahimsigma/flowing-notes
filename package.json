@@ -1,0 +1,21 @@
+{
+  "name": "flowing-notes",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/copy-model.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/copy-model.mjs",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@spotify/basic-pitch": "1.0.1",
+    "@tensorflow/tfjs": "3.21.0",
+    "@tensorflow/tfjs-backend-webgl": "3.21.0"
+  },
+  "devDependencies": {
+    "vite": "5.4.14"
+  }
+}
