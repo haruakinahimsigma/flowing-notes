@@ -4,7 +4,6 @@ ncls
 pretty_midi
 scipy
 mir_eval
-pydub
 soxr
 moduleconf
 torch_optimizer
