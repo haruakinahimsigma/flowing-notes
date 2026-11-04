@@ -50,20 +50,39 @@ async function extractAudio(file){
   try{await engine.deleteFile(input);await engine.deleteFile(output)}catch{}
   return new File([data],file.name.replace(/[.][^.]+$/,'')+'.wav',{type:'audio/wav'});
 }
+function platformPage(url){
+  const host=url.hostname.toLowerCase().replace(/^www\\./,'');
+  const matches=(domain)=>host===domain||host.endsWith('.'+domain);
+  if(matches('youtube.com')||host==='youtu.be'||matches('youtube-nocookie.com'))return 'YouTube';
+  if(matches('instagram.com')||host==='instagr.am')return 'Instagram';
+  if(matches('tiktok.com'))return 'TikTok';
+  return null;
+}
 async function fetchMediaUrl(value){
   let url;
   try{url=new URL(value)}catch{throw Error('Enter a valid direct media-file URL.')}
-  if(!['http:','https:'].includes(url.protocol))throw Error('Only HTTPS or HTTP media links are supported.');
-  if(/(youtube[.]com|youtu[.]be|tiktok[.]com|instagram[.]com)/i.test(url.hostname))throw Error('That is a social-media page link, not a direct media file. This version supports direct media URLs and video uploads; platform-page access needs an authorized integration.');
-  status('Downloading media from the link…');
+  if(!['http:','https:'].includes(url.protocol))throw Error('Only HTTP or HTTPS media links are supported.');
+  const platform=platformPage(url);
+  if(platform){
+    throw Error(platform+' link detected. This is a webpage, not a direct media file. Flowing Notes cannot retrieve or extract '+platform+' audio through this link. Upload your original recording or provide a direct media-file URL from a source that permits access.');
+  }
+  if(url.username||url.password)throw Error('Links containing embedded login credentials are not supported.');
+  status('Downloading direct media file…');
   let response;
-  try{response=await fetch(url.href)}catch{throw Error('This host blocked browser access (CORS), or the link is not a direct media file. Try uploading the video instead.')}
+  try{response=await fetch(url.href,{redirect:'follow'})}
+  catch{throw Error('This host blocked browser access (CORS), or the link is not a direct media file. Try uploading the recording instead.')}
   if(!response.ok)throw Error('The media host returned HTTP '+response.status+'.');
+  const maxBytes=200*1024*1024;
+  const declaredSize=Number(response.headers.get('content-length')||0);
+  if(declaredSize>maxBytes)throw Error('This file is larger than the 200 MB browser-processing limit.');
   const blob=await response.blob();
-  const type=blob.type||'';
-  const name=decodeURIComponent(url.pathname.split('/').pop()||'linked-media');
-  if(!type.startsWith('audio/')&&!type.startsWith('video/')&&!/[.](mp3|wav|m4a|ogg|flac|mp4|mov|webm|mkv)$/i.test(name))throw Error('The URL did not return a recognized audio or video file.');
-  return new File([blob],name,{type:type||(/[.](mp4|mov|webm|mkv)$/i.test(name)?'video/mp4':'audio/mpeg')});
+  if(blob.size>maxBytes)throw Error('This file is larger than the 200 MB browser-processing limit.');
+  const type=(blob.type||'').split(';')[0].trim().toLowerCase();
+  const name=decodeURIComponent(url.pathname.split('/').pop()||'linked-media').replace(/[\\\\/\\0-\\x1f]/g,'_');
+  const recognizedType=type.startsWith('audio/')||type.startsWith('video/');
+  const recognizedExtension=/\\.(mp3|wav|m4a|ogg|flac|aac|mp4|mov|m4v|webm|mkv|avi)$/i.test(name);
+  if(!recognizedType&&!recognizedExtension)throw Error('The URL did not return a recognized audio or video file. Paste a direct MP3, WAV, MP4, MOV or WEBM link.');
+  return new File([blob],name,{type:type||(recognizedExtension&&/\\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name)?'video/mp4':'audio/mpeg')});
 }
 
 async function decode(file){const decoder=new AudioContext();try{const source=await decoder.decodeAudioData(await file.arrayBuffer()),length=Math.ceil(source.duration*22050),offline=new OfflineAudioContext(1,length,22050),node=offline.createBufferSource();node.buffer=source;node.connect(offline.destination);node.start();const mono=await offline.startRendering();return {samples:mono.getChannelData(0),duration:source.duration}}finally{await decoder.close()}}
