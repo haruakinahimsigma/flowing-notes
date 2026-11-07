@@ -39,10 +39,10 @@ async function authorize(req,res,next){
 app.disable('x-powered-by');
 app.use(express.json({limit:'8mb'}));
 app.get('/api/health',(req,res)=>res.json({ok:missing.length===0,storage:missing.length===0?'connected':'not-configured'}));
-app.post('/api/transcribe',express.raw({type:'application/octet-stream',limit:'100mb'}),async(req,res)=>{
+app.post('/api/transcribe',express.raw({type:'application/octet-stream',limit:'150mb'}),async(req,res)=>{
   try{
     if(!Buffer.isBuffer(req.body)||!req.body.length)return res.status(400).json({error:'Audio file is empty.'});
-    const upstreamUrl=process.env.TRANSKUN_URL||'http://transkun.railway.internal:8000';
+    const upstreamUrl=process.env.PIANO_AI_URL||'http://piano-ai.railway.internal:8000';
     const upstream=await fetch(upstreamUrl+'/transcribe',{
       method:'POST',
       headers:{'Content-Type':'application/octet-stream','X-File-Name':req.get('x-file-name')||'recording.wav'},
@@ -52,8 +52,8 @@ app.post('/api/transcribe',express.raw({type:'application/octet-stream',limit:'1
     const body=await upstream.text();
     res.status(upstream.status).type('application/json').send(body);
   }catch(e){
-    console.error('Transkun request failed:',e);
-    res.status(502).json({error:'The Transkun V2 service is unavailable or timed out. Please try again.'});
+    console.error('Piano AI request failed:',e);
+    res.status(502).json({error:'The piano transcription service is unavailable or timed out. Please try again.'});
   }
 });
 app.post('/api/projects',async(req,res)=>{
@@ -64,7 +64,7 @@ app.post('/api/projects',async(req,res)=>{
     res.status(201).json({id,token});
   }catch(e){console.error(e);res.status(500).json({error:'Could not create cloud project.'})}
 });
-app.put('/api/projects/:id/recording',authorize,express.raw({type:'application/octet-stream',limit:'100mb'}),async(req,res)=>{
+app.put('/api/projects/:id/recording',authorize,express.raw({type:'application/octet-stream',limit:'150mb'}),async(req,res)=>{
   try{
     if(!Buffer.isBuffer(req.body)||!req.body.length)return res.status(400).json({error:'Recording body is empty.'});
     const contentType=String(req.get('x-file-type')||'audio/mpeg').slice(0,120);

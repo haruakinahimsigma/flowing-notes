@@ -5,7 +5,7 @@ import './style.css';
 const $ = id => document.getElementById(id);
 const canvas = $('pianoRoll'), ctx = canvas.getContext('2d');
 const NAMES = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
-let notes=[], duration=0, playing=false, started=0, offset=0, raf=0, audio=null, audioBuffer=null, audioSource=null, ffmpeg=null, ffmpegPromise=null, currentFile=null;
+let notes=[], pedalEvents=[], duration=0, playing=false, started=0, offset=0, raf=0, audio=null, audioBuffer=null, audioSource=null, ffmpeg=null, ffmpegPromise=null, currentFile=null;
 
 const fmt=s=>Math.floor(Math.max(0,s)/60)+':'+String(Math.floor(Math.max(0,s)%60)).padStart(2,'0');
 function status(s){$('status').textContent=s}
@@ -106,36 +106,37 @@ async function transcribe(file){
   try{
     if(isVideoFile(file))file=await extractAudio(file);
     currentFile=file;
-    status('Preparing audio for Transkun V2…');
+    status('Preparing audio for high-resolution piano analysis…');
     const decoded=await decode(file);
     duration=decoded.duration;audioBuffer=decoded.audioBuffer;
-    status('Sending audio to Transkun V2 piano model…');
-    status('Uploading audio to Transkun V2…');
+    status('Preparing high-resolution piano transcription…');
+    status('Uploading audio to the piano AI engine…');
     const response=await fetch('/api/transcribe',{
       method:'POST',
       headers:{'Content-Type':'application/octet-stream','X-File-Name':'transkun-input.wav'},
       body:encodeWav(decoded.samples,22050),
       signal:AbortSignal.timeout(600000)
     });
-    status('Transkun responded ('+response.status+') — reading transcription…');
+    status('AI engine responded ('+response.status+') — refining note events…');
     const responseText=await response.text();
     let result;
     try{result=JSON.parse(responseText)}catch{throw Error('Transkun returned an unreadable response: '+responseText.slice(0,180))}
     if(!response.ok)throw Error(result.error||result.detail||('Transcription service failed ('+response.status+').'));
     if(!Array.isArray(result.notes))throw Error('Transkun response did not contain a notes array.');
-    status('Transkun returned '+result.notes.length+' raw notes — building piano roll…');
+    status('Received '+result.notes.length+' note events — building piano roll…');
     notes=result.notes.filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
       .sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);
+    pedalEvents=Array.isArray(result.pedalEvents)?result.pedalEvents.filter(p=>Number.isFinite(p.startTimeSeconds)&&Number.isFinite(p.endTimeSeconds)&&p.endTimeSeconds>p.startTimeSeconds):[];
     if(!notes.length)throw Error('Transkun could not detect clear piano notes. Try a cleaner recording.');
     duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
     $('trackName').textContent=file.name;
-    $('trackMeta').textContent='Transkun V2 piano transcription · '+fmt(duration);
+    $('trackMeta').textContent='Kong high-resolution piano AI · '+fmt(duration);
     $('noteCount').textContent=notes.length.toLocaleString();
     $('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);
     $('empty').hidden=true;offset=0;
     ['playBtn','stopBtn','exportBtn'].forEach(id=>$(id).disabled=false);
     $('saveCloudBtn').disabled=false;$('seek').disabled=false;
-    progress(1);status('Done — '+notes.length+' notes detected by Transkun V2.');draw();
+    progress(1);status('Done — '+notes.length+' notes and '+pedalEvents.length+' sustain events detected.');draw();
   }catch(e){
     console.error(e);status('Could not transcribe: '+(e.message||'unknown error'));
   }finally{$('audioFile').disabled=false;$('linkBtn').disabled=false}
@@ -164,7 +165,7 @@ async function saveCloudProject(){
     status('Uploading your recording to Singapore storage…');
     await cloudRequest('/api/projects/'+project.id+'/recording',{...project,token:project.token},{method:'PUT',headers:{'Content-Type':'application/octet-stream','X-File-Type':currentFile.type||'audio/wav','X-File-Name':encodeURIComponent(currentFile.name||'recording.wav')},body:currentFile});
     status('Saving detected notes…');
-    await cloudRequest('/api/projects/'+project.id+'/transcription',project,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:notes.map(n=>({pitchMidi:n.pitchMidi,startTimeSeconds:n.startTimeSeconds,durationSeconds:n.durationSeconds,amplitude:n.amplitude})),duration,trackName:currentFile.name||'Piano recording'})});
+    await cloudRequest('/api/projects/'+project.id+'/transcription',project,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:notes.map(n=>({pitchMidi:n.pitchMidi,startTimeSeconds:n.startTimeSeconds,durationSeconds:n.durationSeconds,amplitude:n.amplitude})),pedalEvents,duration,trackName:currentFile.name||'Piano recording'})});
     const saved=getCloudProjects();saved.unshift({id:project.id,token:project.token,name:currentFile.name||'Piano recording',updatedAt:new Date().toISOString()});
     localStorage.setItem(PROJECTS_KEY,JSON.stringify(saved.slice(0,30)));refreshCloudProjects();
     $('savedProjects').value=project.id;status('Saved privately to your Flowing Notes cloud storage.');
@@ -181,7 +182,7 @@ async function openCloudProject(){
     const response=await cloudRequest('/api/projects/'+project.id+'/recording',project);
     const blob=await response.blob();currentFile=new File([blob],project.name||'recording.wav',{type:blob.type||'audio/wav'});
     const decoded=await decode(currentFile);audioBuffer=decoded.audioBuffer;
-    notes=transcription.notes||[];duration=transcription.duration||decoded.duration;duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
+    notes=transcription.notes||[];pedalEvents=transcription.pedalEvents||[];duration=transcription.duration||decoded.duration;duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
     $('trackName').textContent=transcription.trackName||project.name||'Saved piano roll';$('trackMeta').textContent='Cloud project · '+fmt(duration);
     $('noteCount').textContent=notes.length.toLocaleString();$('duration').textContent=fmt(duration);$('key').textContent=keyEstimate(notes);
     $('empty').hidden=true;offset=0;playing=false;['playBtn','stopBtn','exportBtn','saveCloudBtn'].forEach(id=>$(id).disabled=false);$('seek').disabled=false;$('clock').textContent='0:00 / '+fmt(duration);draw();status('Cloud project loaded — no re-upload or re-transcription needed.');
@@ -193,7 +194,7 @@ function stopAudio(){if(audioSource){try{audioSource.stop()}catch{}audioSource.d
 function play(){if(!audioBuffer){status('Original audio is unavailable. Please upload the recording again.');return}if(offset>=duration)offset=0;playing=true;started=performance.now();audio=new AudioContext();audioSource=audio.createBufferSource();audioSource.buffer=audioBuffer;audioSource.connect(audio.destination);audioSource.start(0,Math.min(offset,audioBuffer.duration));$('playBtn').textContent='Ⅱ Pause';draw()}
 function pause(){if(!playing)return;offset=Math.min(duration,offset+(performance.now()-started)/1000);playing=false;cancelAnimationFrame(raf);stopAudio();$('playBtn').textContent='▶ Play';draw();$('clock').textContent=fmt(offset)+' / '+fmt(duration)}
 function vlq(v){let b=v&127;const out=[];while((v>>=7)){b<<=8;b|=(v&127)|128}while(true){out.push(b&255);if(b&128)b>>=8;else break}return out}
-function exportMidi(){const events=[];for(const n of notes){const a=Math.round(n.startTimeSeconds*960),b=Math.max(a+1,Math.round((n.startTimeSeconds+n.durationSeconds)*960));events.push({t:a,on:1,p:n.pitchMidi,v:Math.max(1,Math.min(127,Math.round(n.amplitude*127)))},{t:b,on:0,p:n.pitchMidi,v:0})}events.sort((a,b)=>a.t-b.t||a.on-b.on);const track=[];let last=0;for(const e of events){track.push(...vlq(e.t-last),e.on?0x90:0x80,e.p,e.v);last=e.t}track.push(0,255,47,0);const header=[77,84,104,100,0,0,0,6,0,0,0,1,1,224],chunk=[77,84,114,107,(track.length>>>24)&255,(track.length>>>16)&255,(track.length>>>8)&255,track.length&255,...track];const blob=new Blob([new Uint8Array([...header,...chunk])],{type:'audio/midi'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='flowing-notes.mid';a.click();URL.revokeObjectURL(url)}
+function exportMidi(){const events=[];for(const n of notes){const a=Math.round(n.startTimeSeconds*960),b=Math.max(a+1,Math.round((n.startTimeSeconds+n.durationSeconds)*960));events.push({t:a,on:1,p:n.pitchMidi,v:Math.max(1,Math.min(127,Math.round(n.amplitude*127)))},{t:b,on:0,p:n.pitchMidi,v:0})}for(const p of pedalEvents){events.push({t:Math.max(0,Math.round(p.startTimeSeconds*960)),bytes:[0xB0,64,127]},{t:Math.max(0,Math.round(p.endTimeSeconds*960)),bytes:[0xB0,64,0]})}events.sort((a,b)=>a.t-b.t||(a.bytes?1:0)-(b.bytes?1:0)||(a.on??0)-(b.on??0));const track=[];let last=0;for(const e of events){track.push(...vlq(e.t-last),...(e.bytes||[e.on?0x90:0x80,e.p,e.v]));last=e.t}track.push(0,255,47,0);const header=[77,84,104,100,0,0,0,6,0,0,0,1,1,224],chunk=[77,84,114,107,(track.length>>>24)&255,(track.length>>>16)&255,(track.length>>>8)&255,track.length&255,...track];const blob=new Blob([new Uint8Array([...header,...chunk])],{type:'audio/midi'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='flowing-notes.mid';a.click();URL.revokeObjectURL(url)}
 function buildKeyboard(){const k=$('keyboard');for(let p=21;p<=108;p++){const el=document.createElement('div');el.className='key'+([1,3,6,8,10].includes(p%12)?' black':'');k.append(el)}}
 $('audioFile').addEventListener('change',e=>{if(e.target.files?.[0])transcribe(e.target.files[0])});
 $('linkBtn').onclick=async()=>{const value=$('videoUrl').value.trim();if(!value){status('Paste a direct audio or video file URL first.');return}try{const file=await fetchMediaUrl(value);await transcribe(file)}catch(e){console.error(e);status('Could not load link: '+(e.message||'unknown error'))}};
