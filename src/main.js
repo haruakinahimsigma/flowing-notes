@@ -12,7 +12,7 @@ function status(s){$('status').textContent=s}
 function progress(p){$('progressWrap').hidden=false;$('progressBar').style.width=(p*100)+'%';$('progressText').textContent=Math.round(p*100)+'%'}
 function keyName(p){return NAMES[p%12]+(Math.floor(p/12)-1)}
 function keyEstimate(list){const e=Array(12).fill(0),maj=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88],min=[6.33,2.68,3.52,5.38,2.6,3.53,2.54,4.75,3.98,2.69,3.34,3.17];list.forEach(n=>e[n.pitchMidi%12]+=n.durationSeconds);let best=-Infinity,result='—';for(let r=0;r<12;r++)for(const [m,p] of [['major',maj],['minor',min]]){let v=0;for(let i=0;i<12;i++)v+=e[(i+r)%12]*p[i];if(v>best){best=v;result=NAMES[r]+' '+m}}return result}
-function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;if(!w||!h)return;ctx.clearRect(0,0,w,h);ctx.fillStyle='#0b1020';ctx.fillRect(0,0,w,h);const low=21,high=108,range=high-low,now=playing?offset+(performance.now()-started)/1000:offset,windowSec=6;const x=p=>(p-low)/range*w;const y=t=>h-(t-now)*h/windowSec;for(let p=low;p<=high;p++){const px=x(p);ctx.strokeStyle=p%12===0?'#293149':'#1b2336';ctx.lineWidth=p%12===0?1.2:.6;ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,h);ctx.stroke()}for(let t=Math.ceil(now);t<=Math.min(duration,now+windowSec);t++){const py=y(t);ctx.strokeStyle='#202a40';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,py);ctx.lineTo(w,py);ctx.stroke();ctx.fillStyle='#8490aa';ctx.font='10px system-ui';ctx.fillText(fmt(t),5,py-3)}for(const n of notes){const top=y(n.startTimeSeconds),bottom=y(n.startTimeSeconds+n.durationSeconds),left=x(n.pitchMidi-.46),right=x(n.pitchMidi+.46);if(bottom<0||top>h)continue;ctx.fillStyle='#7185ee';ctx.globalAlpha=.94;ctx.beginPath();ctx.roundRect(left,Math.max(0,top),Math.max(2,right-left),Math.max(3,Math.min(h,bottom)-Math.max(0,top)),3);ctx.fill();if(bottom-top>24){ctx.fillStyle='#07101b';ctx.font='10px system-ui';ctx.fillText(keyName(n.pitchMidi),left+3,Math.max(12,top+13))}}ctx.globalAlpha=1;ctx.strokeStyle='#f1f3ff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,h-1);ctx.lineTo(w,h-1);ctx.stroke();if(playing){$('seek').value=duration?now/duration*1000:0;$('clock').textContent=fmt(now)+' / '+fmt(duration);if(now>=duration){pause();return}raf=requestAnimationFrame(draw)}}
+function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;if(!w||!h)return;ctx.clearRect(0,0,w,h);ctx.fillStyle='#0b1020';ctx.fillRect(0,0,w,h);const low=21,high=108,range=high-low,now=playing?offset+(performance.now()-started)/1000:offset,windowSec=6;const x=p=>(p-low)/range*w;const y=t=>h-(t-now)*h/windowSec;for(let p=low;p<=high;p++){const px=x(p);ctx.strokeStyle=p%12===0?'#293149':'#1b2336';ctx.lineWidth=p%12===0?1.2:.6;ctx.beginPath();ctx.moveTo(px,0);ctx.lineTo(px,h);ctx.stroke()}for(let t=Math.ceil(now);t<=Math.min(duration,now+windowSec);t++){const py=y(t);ctx.strokeStyle='#202a40';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,py);ctx.lineTo(w,py);ctx.stroke();ctx.fillStyle='#8490aa';ctx.font='10px system-ui';ctx.fillText(fmt(t),5,py-3)}for(const n of notes){const top=y(n.startTimeSeconds),bottom=y(n.startTimeSeconds+n.durationSeconds),left=x(n.pitchMidi-.46),right=x(n.pitchMidi+.46);if(bottom<0||top>h)continue;ctx.fillStyle='#7185ee';ctx.globalAlpha=.94;ctx.beginPath();ctx.roundRect(left,Math.max(0,top),Math.max(2,right-left),Math.max(3,Math.min(h,bottom)-Math.max(0,top)),3);ctx.fill();if(bottom-top>24){ctx.fillStyle='#07101b';ctx.font='10px system-ui';ctx.fillText(keyName(n.pitchMidi),left+3,Math.max(12,top+13))}}for(const p of pedalEvents){const top=y(p.startTimeSeconds),bottom=y(p.endTimeSeconds);if(bottom<0||top>h)continue;ctx.fillStyle='#38d7c8';ctx.globalAlpha=.9;ctx.fillRect(2,Math.max(0,top),6,Math.max(2,Math.min(h,bottom)-Math.max(0,top)))}ctx.globalAlpha=1;ctx.strokeStyle='#f1f3ff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,h-1);ctx.lineTo(w,h-1);ctx.stroke();if(playing){$('seek').value=duration?now/duration*1000:0;$('clock').textContent=fmt(now)+' / '+fmt(duration);if(now>=duration){pause();return}raf=requestAnimationFrame(draw)}}
 function resize(){const r=canvas.getBoundingClientRect(),d=window.devicePixelRatio||1;canvas.width=Math.max(1,r.width*d);canvas.height=Math.max(1,r.height*d);ctx.setTransform(d,0,0,d,0,0);draw()}
 
 async function getFFmpeg(){
@@ -113,21 +113,21 @@ async function transcribe(file){
     status('Uploading audio to the piano AI engine…');
     const response=await fetch('/api/transcribe',{
       method:'POST',
-      headers:{'Content-Type':'application/octet-stream','X-File-Name':'transkun-input.wav'},
+      headers:{'Content-Type':'application/octet-stream','X-File-Name':'piano-input.wav'},
       body:encodeWav(decoded.samples,22050),
       signal:AbortSignal.timeout(600000)
     });
     status('AI engine responded ('+response.status+') — refining note events…');
     const responseText=await response.text();
     let result;
-    try{result=JSON.parse(responseText)}catch{throw Error('Transkun returned an unreadable response: '+responseText.slice(0,180))}
+    try{result=JSON.parse(responseText)}catch{throw Error('Piano AI returned an unreadable response: '+responseText.slice(0,180))}
     if(!response.ok)throw Error(result.error||result.detail||('Transcription service failed ('+response.status+').'));
-    if(!Array.isArray(result.notes))throw Error('Transkun response did not contain a notes array.');
+    if(!Array.isArray(result.notes))throw Error('Piano AI response did not contain a notes array.');
     status('Received '+result.notes.length+' note events — building piano roll…');
     notes=result.notes.filter(n=>n.pitchMidi>=21&&n.pitchMidi<=108&&n.durationSeconds>0)
       .sort((a,b)=>a.startTimeSeconds-b.startTimeSeconds);
     pedalEvents=Array.isArray(result.pedalEvents)?result.pedalEvents.filter(p=>Number.isFinite(p.startTimeSeconds)&&Number.isFinite(p.endTimeSeconds)&&p.endTimeSeconds>p.startTimeSeconds):[];
-    if(!notes.length)throw Error('Transkun could not detect clear piano notes. Try a cleaner recording.');
+    if(!notes.length)throw Error('The piano AI could not detect clear notes. Try a cleaner recording.');
     duration=Math.max(duration,...notes.map(n=>n.startTimeSeconds+n.durationSeconds));
     $('trackName').textContent=file.name;
     $('trackMeta').textContent='Kong high-resolution piano AI · '+fmt(duration);
